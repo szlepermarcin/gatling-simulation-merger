@@ -3,17 +3,36 @@ package io
 import record.Record
 
 import scala.collection.mutable
+import java.nio.file.Path
+import java.nio.file.Files
 
-class MultiLogReader(readers: List[LogReader], prefetchSize: Int)
+import scala.jdk.CollectionConverters.*
+import handler.Handler
+import scala.util.Using
+import record.Record.RunMessage
+import record.Record.Request
+import record.Record.User.UserStart
+import record.Record.User.UserEnd
+import record.Record.Group
+import record.Record.Crash
+
+class MultiLogReader(logFiles: List[Path], prefetchSize: Int)
     extends AutoCloseable {
 
-  given recordOrd: Ordering[Record] = Ordering
-    .by[Record, Long](_.timestamp)
-    .reverse
-    .orElse(Ordering.by(_.priority))
+  given recordOrd: Ordering[Record] =
+    List(
+      Ordering.by[Record, Int] {
+        case r: RunMessage => 1
+        case _             => 0
+      },
+      Ordering.by[Record, Long](_.timestamp).reverse,
+      Ordering.by[Record, Int](_.priority)
+    ).reduce(_ orElse _)
 
   private val pq =
     new mutable.PriorityQueue[(Record, Iterator[Record])]()(Ordering.by(_._1))
+
+  private val readers = logFiles.map(new LogReader(_))
 
   private val iterators =
     readers
@@ -36,4 +55,27 @@ class MultiLogReader(readers: List[LogReader], prefetchSize: Int)
 
   override def close(): Unit = readers.foreach(_.close)
 
+}
+
+object MultiLogReader {
+  def run(inputDir: Path, prefetchSize: Int)(using handler: Handler): Unit = {
+
+    val f = Files
+      .list(inputDir)
+      .toList()
+      .asScala
+      .toList
+      .filter(p => p.toString().endsWith(".log"))
+
+    if (f.nonEmpty) then {
+
+      println(s"found files: ${f.mkString(",")}")
+
+      Using.resource(new MultiLogReader(f, prefetchSize = 20))(handler.handle)
+
+    } else {
+      println("no source files - skipping!")
+    }
+
+  }
 }

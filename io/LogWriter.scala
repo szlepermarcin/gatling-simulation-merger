@@ -36,16 +36,16 @@ class LogWriter(
           )
       case r: Request =>
         os.writeByte(1)
-        r.write(os, stringCache, Some(runMessage.start))
+        r.write(os, stringCache, Some(runMessage))
       case r: User =>
         os.writeByte(2)
-        r.write(os, stringCache, Some(runMessage.start))
+        r.write(os, stringCache, Some(runMessage))
       case r: Group =>
         os.writeByte(3)
-        r.write(os, stringCache, Some(runMessage.start))
+        r.write(os, stringCache, Some(runMessage))
       case r: Crash =>
         os.writeByte(4)
-        r.write(os, stringCache, Some(runMessage.start))
+        r.write(os, stringCache, Some(runMessage))
   }
 
   def close(): Unit = {

@@ -18,8 +18,8 @@ object Record {
     def read(
         is: DataInputStream,
         cache: mutable.Map[Int, String],
-        runStart: Option[Long]
-    )(using LogFileCodec[T]): T = LogFileCodec[T].read(is, cache, runStart)
+        ctx: Option[LogFileCodec.Context]
+    )(using LogFileCodec[T]): T = LogFileCodec[T].read(is, cache, ctx)
   }
 
   case class RunMessage(
@@ -29,7 +29,8 @@ object Record {
       runDescription: String,
       scenarios: Array[String],
       assertions: List[Array[Byte]]
-  ) extends Record {
+  ) extends Record
+      with LogFileCodec.Context {
 
     def priority: Int = 5
 
@@ -38,8 +39,16 @@ object Record {
     def isCompatible(other: RunMessage): Boolean = {
       gatlingVersion == other.gatlingVersion
       && simulationClass == other.simulationClass
-      && (scenarios sameElements other.scenarios)
     }
+
+    def merge(other: RunMessage): RunMessage = {
+      if isCompatible(other) then {
+        copy(scenarios = (scenarios ++ other.scenarios).distinct)
+      } else {
+        throw new RuntimeException("Incompatible log file")
+      }
+    }
+
   }
 
   object RunMessage extends RecordCompanion[RunMessage] {
@@ -50,7 +59,7 @@ object Record {
           t: RunMessage,
           os: DataOutputStream,
           cache: scala.collection.mutable.Map[String, Int],
-          runStart: Option[Long]
+          ctx: Option[LogFileCodec.Context]
       ): Unit = {
         import t.*
         os.writeString(gatlingVersion)
@@ -68,7 +77,7 @@ object Record {
       override def read(
           is: DataInputStream,
           cache: scala.collection.mutable.Map[Int, String],
-          runStart: Option[Long]
+          runStart: Option[LogFileCodec.Context]
       ): RunMessage = {
         val gatlingVersion = is.readString()
         val simulationClass = is.readString()
@@ -109,17 +118,17 @@ object Record {
           t: Request,
           os: DataOutputStream,
           cache: scala.collection.mutable.Map[String, Int],
-          runStart: Option[Long]
+          ctx: Option[LogFileCodec.Context]
       ): Unit = {
         import t.*
 
-        withRunStart(runStart) { rs =>
+        withContext(ctx) { rs =>
 
           os.writeInt(group.length)
           group.foreach(os.writeCachedString(_, cache))
           os.writeCachedString(name, cache)
-          os.writeInt((start - rs).toInt)
-          os.writeInt((`end` - rs).toInt)
+          os.writeInt((start - rs.timestamp).toInt)
+          os.writeInt((`end` - rs.timestamp).toInt)
           os.writeBoolean(status)
           os.writeCachedString(error, cache)
 
@@ -129,13 +138,13 @@ object Record {
       override def read(
           is: DataInputStream,
           cache: scala.collection.mutable.Map[Int, String],
-          runStart: Option[Long]
+          ctx: Option[LogFileCodec.Context]
       ): Request = {
-        withRunStart(runStart) { rs =>
+        withContext(ctx) { rs =>
           val groups = List.fill(is.readInt())(is.readCachedString(cache))
           val name = is.readCachedString(cache)
-          val start = is.readInt().toLong + rs
-          val `end` = is.readInt().toLong + rs
+          val start = is.readInt().toLong + rs.timestamp
+          val `end` = is.readInt().toLong + rs.timestamp
           val status = is.readBoolean()
           val error = is.readCachedString(cache)
 
@@ -145,12 +154,27 @@ object Record {
     }
   }
 
-  case class User(scenario: Int, start: Boolean, timestamp: Long)
-      extends Record {
-    def priority: Int = if start then 4 else 1
+  sealed trait User extends Record {
+    def scenario: String
+    def timestamp: Long
+    def start: Boolean
   }
 
   object User extends RecordCompanion[User] {
+
+    def apply(scenario: String, start: Boolean, timestamp: Long): User =
+      if start then UserStart(scenario, timestamp)
+      else UserEnd(scenario, timestamp)
+
+    case class UserStart(scenario: String, timestamp: Long) extends User {
+      def start: Boolean = true
+      def priority: Int = 4
+    }
+
+    case class UserEnd(scenario: String, timestamp: Long) extends User {
+      def start: Boolean = false
+      def priority: Int = 1
+    }
 
     given LogFileCodec[User] with {
 
@@ -158,26 +182,26 @@ object Record {
           t: User,
           os: DataOutputStream,
           cache: scala.collection.mutable.Map[String, Int],
-          runStart: Option[Long]
+          ctx: Option[LogFileCodec.Context]
       ): Unit = {
         import t.*
-        withRunStart(runStart) { rs =>
-          os.writeInt(scenario)
+        withContext(ctx) { rs =>
+          os.writeInt(rs.scenarioIndex(scenario))
           os.writeBoolean(start)
-          os.writeInt((timestamp - rs).toInt)
+          os.writeInt((timestamp - rs.timestamp).toInt)
         }
       }
 
       override def read(
           is: DataInputStream,
           cache: scala.collection.mutable.Map[Int, String],
-          runStart: Option[Long]
+          ctx: Option[LogFileCodec.Context]
       ): User = {
-        withRunStart(runStart) { rs =>
+        withContext(ctx) { rs =>
 
-          val scenario = is.readInt()
+          val scenario = rs.scenarios(is.readInt())
           val start = is.readBoolean()
-          val timestamp = is.readInt().toLong + rs
+          val timestamp = is.readInt().toLong + rs.timestamp
 
           User(scenario, start, timestamp)
         }
@@ -204,16 +228,16 @@ object Record {
           t: Group,
           os: DataOutputStream,
           cache: scala.collection.mutable.Map[String, Int],
-          runStart: Option[Long]
+          ctx: Option[LogFileCodec.Context]
       ): Unit = {
         import t.*
 
-        withRunStart(runStart) { rs =>
+        withContext(ctx) { rs =>
 
           os.writeInt(group.length)
           group.foreach(os.writeCachedString(_, cache))
-          os.writeInt((start - rs).toInt)
-          os.writeInt((`end` - rs).toInt)
+          os.writeInt((start - rs.timestamp).toInt)
+          os.writeInt((`end` - rs.timestamp).toInt)
           os.writeInt(time)
           os.writeBoolean(status)
         }
@@ -222,13 +246,13 @@ object Record {
       override def read(
           is: DataInputStream,
           cache: scala.collection.mutable.Map[Int, String],
-          runStart: Option[Long]
+          ctx: Option[LogFileCodec.Context]
       ): Group = {
-        withRunStart(runStart) { rs =>
+        withContext(ctx) { rs =>
 
           val groups = List.fill(is.readInt())(is.readCachedString(cache))
-          val start = is.readInt().toLong + rs
-          val `end` = is.readInt().toLong + rs
+          val start = is.readInt().toLong + rs.timestamp
+          val `end` = is.readInt().toLong + rs.timestamp
           val time = is.readInt()
           val status = is.readBoolean()
 
@@ -249,26 +273,26 @@ object Record {
           t: Crash,
           os: DataOutputStream,
           cache: scala.collection.mutable.Map[String, Int],
-          runStart: Option[Long]
+          ctx: Option[LogFileCodec.Context]
       ): Unit = {
         import t.*
 
-        withRunStart(runStart) { rs =>
+        withContext(ctx) { rs =>
 
           os.writeCachedString(msg, cache)
-          os.writeInt((timestamp - rs).toInt)
+          os.writeInt((timestamp - rs.timestamp).toInt)
         }
       }
 
       override def read(
           is: DataInputStream,
           cache: scala.collection.mutable.Map[Int, String],
-          runStart: Option[Long]
+          ctx: Option[LogFileCodec.Context]
       ): Crash = {
-        withRunStart(runStart) { rs =>
+        withContext(ctx) { rs =>
 
           val msg = is.readCachedString(cache)
-          val timestamp = is.readInt().toLong + rs
+          val timestamp = is.readInt().toLong + rs.timestamp
 
           Crash(msg, timestamp)
         }

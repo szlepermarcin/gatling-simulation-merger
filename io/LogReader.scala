@@ -27,13 +27,13 @@ class LogReader(path: Path) extends AutoCloseable {
       runMessage = Some(RunMessage.read(is, stringCache, None))
       runMessage
     case 1 =>
-      Some(Request.read(is, stringCache, runMessage.map(_.start)))
+      Some(Request.read(is, stringCache, runMessage))
     case 2 =>
-      Some(User.read(is, stringCache, runMessage.map(_.start)))
+      Some(User.read(is, stringCache, runMessage))
     case 3 =>
-      Some(Group.read(is, stringCache, runMessage.map(_.start)))
+      Some(Group.read(is, stringCache, runMessage))
     case 4 =>
-      Some(Crash.read(is, stringCache, runMessage.map(_.start)))
+      Some(Crash.read(is, stringCache, runMessage))
     case -1 => None
     case _ =>
       throw new RuntimeException("Unsupported record")

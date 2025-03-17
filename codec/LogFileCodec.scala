@@ -8,9 +8,11 @@ import scala.collection.mutable
 
 trait LogFileCodec[T] {
 
-  def withRunStart[A](runStart: Option[Long])(fn: Long => A) = {
-    runStart match
-      case None     => throw new RuntimeException("no runStart value")
+  def withContext[A](
+      ctx: Option[LogFileCodec.Context]
+  )(fn: LogFileCodec.Context => A) = {
+    ctx match
+      case None     => throw new RuntimeException("no context value")
       case Some(rs) => fn(rs)
 
   }
@@ -19,16 +21,27 @@ trait LogFileCodec[T] {
       t: T,
       os: DataOutputStream,
       cache: mutable.Map[String, Int],
-      runStart: Option[Long]
+      ctx: Option[LogFileCodec.Context]
   ): Unit
   def read(
       is: DataInputStream,
       cache: mutable.Map[Int, String],
-      runStart: Option[Long]
+      ctx: Option[LogFileCodec.Context]
   ): T
 }
 
 object LogFileCodec {
+
+  trait Context {
+    def timestamp: Long
+    def scenarios: Array[String]
+
+    def scenarioIndex(name: String): Int =
+      Option(scenarios.indexOf(name))
+        .filterNot(_ < 0)
+        .getOrElse(throw new RuntimeException("Unexpected scenario"))
+  }
+
   def apply[T: LogFileCodec] = summon[LogFileCodec[T]]
 
   object Syntax {
@@ -36,8 +49,8 @@ object LogFileCodec {
       def write(
           os: DataOutputStream,
           cache: mutable.Map[String, Int],
-          runStart: Option[Long]
-      ) = LogFileCodec[T].write(t, os, cache, runStart)
+          ctx: Option[Context]
+      ) = LogFileCodec[T].write(t, os, cache, ctx)
     }
 
     extension (os: DataOutputStream) {
